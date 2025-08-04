@@ -1,0 +1,78 @@
+#include <pyro_utils.h>
+#include <groom.h>
+
+int SKIN_INPUT = 1;
+int MASK_INPUT = 2;
+int SKINVDB_INPUT = -1;
+
+int primid = hasprimattrib(0, "id") ? @id : @primnum;
+
+int opindex = detail(3, "ivalue");
+string strindex = sprintf("%d", opindex);
+
+int primvtx = vertexprimindex(0, @vtxnum);
+float u = (float) primvtx / (@numvtx-1);
+
+int prim = prim(0, "skinprim", @primnum);
+vector primuv = prim(0, "skinprimuv", @primnum);
+
+vector skinuv = primuv(SKIN_INPUT, "uv", prim, primuv);
+
+float length = primintrinsic(0, "measuredperimeter", @primnum);
+
+float freq = evalparmoverridef("..", "frizz_freq", strindex, SKIN_INPUT, prim, primuv, skinuv, 0, @primnum, u, -1, -1, 0, chi("../curveperskinpoint"), primid, SKINVDB_INPUT);
+
+float seed = select(hasprimattrib(0, "id"), prim(0, "id", @primnum), @primnum);
+float randu = rand(seed + chf("../seed"));
+float freqrand = evalparmoverridef("..", "frizz_freqrand", strindex, SKIN_INPUT, prim, primuv, skinuv, 0, @primnum, u, -1, -1, 0, chi("../curveperskinpoint"), primid, SKINVDB_INPUT);
+freqrand *= sample_normal(0, 1, -1, 1, randu);
+
+freq += freqrand;
+if(chi("../frizz_limitfreq" + strindex))
+{
+    float freqlimit = (float)@numvtx/length;
+    freq = sign(freq) * softclip(abs(freq), 0.33 * freqlimit, 0.2);
+}
+
+// Compute tangent for perpendicular displacement
+vector tangent;
+if (primvtx == 0) {
+    vector next_P = point(0, "P", @ptnum+1);
+    tangent = normalize(next_P - @P);
+} else if (primvtx == @numvtx - 1) {
+    vector prev_P = point(0, "P", @ptnum-1);
+    tangent = normalize(@P - prev_P);
+} else {
+    vector prev_P = point(0, "P", @ptnum-1);
+    vector next_P = point(0, "P", @ptnum+1);
+    tangent = normalize(next_P - prev_P);
+}
+
+// Compute noise position in world space with per-hair variation
+vector noise_pos = @P * freq + rand(seed) * 10.0;
+
+// Generate organic curl noise
+vector noise = curlnoise(noise_pos);
+
+// Project noise perpendicular to tangent
+noise -= dot(noise, tangent) * tangent;
+
+float amp = evalparmoverridef("..", "frizz_amp", strindex, SKIN_INPUT, prim, primuv, skinuv, 0, @primnum, u, -1, -1, 0, chi("../curveperskinpoint"), primid, SKINVDB_INPUT);
+
+randu = rand(random_fhash(randu));
+float amprand = evalparmoverridef("..", "frizz_amprand", strindex, SKIN_INPUT, prim, primuv, skinuv, 0, @primnum, u, -1, -1, 0, chi("../curveperskinpoint"), primid, SKINVDB_INPUT);
+amprand *= sample_normal(0, 1, -1, 1, randu);
+
+amp += amprand;
+
+float pointmask = point(MASK_INPUT, "__guideprocess_mask", @ptnum);
+
+vector offset = (primvtx != 0) * pointmask * amp * noise;
+
+if(haspointattrib(SKIN_INPUT, "rot"))
+{
+    matrix3 rot = primuv(SKIN_INPUT, "rot", prim, primuv);
+    offset *= rot;
+}
+
+@P += offset;
